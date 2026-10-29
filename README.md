@@ -276,11 +276,11 @@ Unregister-ScheduledTask -TaskName "AgentRouterAutoSignin" -Confirm:$false
 1. 脚本把 `com.user.agentrouter-autosignin.plist` 里的路径占位符替换成你的真实目录，装进 `~/Library/LaunchAgents/`；
 2. 这次开机**立刻跑一次** `checkin-wrapper.sh` 签到；
 3. 以后每次开机登录，`launchd` 用 `RunAtLoad` 触发 `checkin-wrapper.sh`——它先等网络就绪（最多 5 分钟），再调用 `signin.py auto` 签到；
-4. 签到成功（`result: OK`）时，把 `北京时间 | 余额` 追加进 `checkin-record.md` 并**提交到仓库**；**当天已成功过会自动跳过**，不会重复记账。
+4. 签到成功（`result: OK`）时，把 `北京时间 | 余额` 追加进 `checkin-record.md` 并**提交并推送到仓库**；**当天已成功过会自动跳过**，不会重复记账。
 
 查看结果：
 - 运行日志：`/tmp/com.user.agentrouter-autosignin.out`
-- 签到记录：`checkin-record.md`（已进 git，可 `git log` 看历史余额）
+- 签到记录：`checkin-record.md`（已提交并推送到 git，可 `git log` 看历史余额）
 
 > [!WARNING]
 > 脚本**不要放在 `~/Documents`、`~/Desktop`、`~/Downloads`** 下——macOS 隐私保护（TCC）会拦截后台进程读取这些目录，报 `Operation not permitted`，任务会静默失败。请放在如 `~/Projects/agentrouter-auto-signin` 这类目录。
