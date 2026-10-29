@@ -1,12 +1,9 @@
 config.json
 
-# 运行日志与状态（本地用）
+# 运行日志与状态
 checkin.log
 checkin.state
 *.log
-
-# 注意：云端（GitHub Actions）用的「今日已签到」标记 .signed_date 必须提交进仓库，
-# 用于跨运行去重，因此不要把它加入忽略列表。
 
 # Python
 __pycache__/

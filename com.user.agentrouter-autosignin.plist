@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    AgentRouter 自动签到 · macOS launchd 模板（开机联网后运行一次）
+
+    本文件是模板，包含占位符 __PROJECT_DIR__。不要手动改路径：
+    直接双击 enable-checkin.command，它会用项目真实路径替换占位符，
+    生成最终 plist 并安装到 ~/Library/LaunchAgents/。
+
+    行为说明：
+      · RunAtLoad = true：每次登录 / 开机后触发一次 checkin-wrapper.sh。
+      · 不再使用 StartInterval 每 30 分钟轮询——改为「每日开机联网后运行一次」。
+      · checkin-wrapper.sh 会先等网络就绪（最多约 5 分钟），再签到；
+        当天已成功签到过则跳过，不会重复记账。
+      · 日志在 /tmp，不在仓库里：/tmp/com.user.agentrouter-autosignin.out / .err
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.user.agentrouter-autosignin</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__PROJECT_DIR__/checkin-wrapper.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__PROJECT_DIR__</string>
+
+    <!-- 开机 / 登录时触发一次。真正「联网后」的等待在 wrapper 里做，
+         因为 launchd 的 RunAtLoad 可能在网络就绪前就点火。 -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/com.user.agentrouter-autosignin.out</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/com.user.agentrouter-autosignin.err</string>
+</dict>
+</plist>
