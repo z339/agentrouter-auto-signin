@@ -1,0 +1,101 @@
+name: "AgentRouter 定时签到"
+
+# 说明：GitHub Actions 不允许在 on.schedule.cron 里使用变量/表达式，
+# 所以采用「高频轮询 + 时间门控」模式（参考 v2free 项目）：
+#   每 5 分钟跑一次，仅在到达仓库 Variables 中 SCHEDULED 指定的北京时间（默认 0900）
+#   且今天还没签过时，才真正执行签到。其余轮询几乎零成本（只跑一个判断步骤）。
+#
+# 为什么不直接用 cron 定时到具体时刻：
+#   1) cron 用 UTC，改时区换算麻烦；2) 单点定时一旦那次失败就漏一天。
+#   轮询 + 门控既能按北京时间精确控制，又自带「失败后下一轮自动重试」的兜底。
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # 每 5 分钟检查一次（UTC）
+  workflow_dispatch:        # 允许在 Actions 页面手动触发（手动触发会忽略时间门控，强制执行）
+
+# 写入「今日已签到」标记需要提交权限（把 .signed_date 提交回仓库做去重）
+permissions:
+  contents: write
+
+# 串行执行：避免两次轮询并发都读到「未签到」而重复登录（签到本身幂等，但能省一次请求）
+concurrency:
+  group: agentrouter-checkin
+  cancel-in-progress: false
+
+env:
+  RUN_ENV: 'cloud'
+
+jobs:
+  checkin:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 判断是否到签到时间
+        id: gate
+        env:
+          # 默认定时：北京时间 09:00。设置了仓库 Variables 中的 SCHEDULED 则用它，否则用默认。
+          SCHEDULED: ${{ vars.SCHEDULED || '0900' }}
+        run: |
+          python3 - <<'PY'
+          import datetime, os
+          # 默认定时（北京时间 HHMM）。环境变量 SCHEDULED 有设置就用它，否则用默认 '0900'。
+          DEFAULT_SCHEDULED = "0900"
+          scheduled = (os.environ.get("SCHEDULED") or DEFAULT_SCHEDULED).strip()
+          now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
+          now_hm = now.strftime("%H%M")
+          today = now.strftime("%Y-%m-%d")
+          is_dispatch = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+          try:
+              last = open(".signed_date").read().strip()
+          except FileNotFoundError:
+              last = ""
+          # 手动触发总是执行；定时触发需：今天还没签过 且 当前北京时间已到设定时刻
+          should = is_dispatch or (last != today and now_hm >= scheduled)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"should_run={'true' if should else 'false'}\n")
+          print(f"now={now_hm} scheduled={scheduled} last_signed={last or '无'} should_run={should}")
+          PY
+
+      - name: Set up Python
+        if: steps.gate.outputs.should_run == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Random sleep
+        if: steps.gate.outputs.should_run == 'true'
+        run: sleep $(shuf -i 10-300 -n 1)
+
+      - name: Install dependencies
+        if: steps.gate.outputs.should_run == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run checkin
+        if: steps.gate.outputs.should_run == 'true'
+        # 账号凭据通过 Secrets 注入（AGENTROUTER_ACCOUNTS_JSON，支持多账号）；
+        # 站点域名可选通过 Secrets 中的 AGENTROUTER_BASE_URL 覆盖。
+        # 使用 auto 模式：结果打到 stdout（进入 Actions 日志），且不依赖本地状态文件
+        # （云端每次都是全新环境，本地状态不会持久化，去重由下面的 .signed_date 负责）。
+        env:
+          AGENTROUTER_ACCOUNTS_JSON: ${{ secrets.AGENTROUTER_ACCOUNTS_JSON }}
+          AGENTROUTER_BASE_URL: ${{ secrets.AGENTROUTER_BASE_URL }}
+        run: |
+          python3 ./signin.py auto
+
+      - name: 写入今日已签到标记
+        # 仅当本次签到成功（Run checkin 步骤退出码 0）才标记当天已签，
+        # 这样失败会在下一轮轮询自动重试，而不会像「失败也写标记」那样漏掉一整天。
+        if: success() && steps.gate.outputs.should_run == 'true'
+        run: |
+          TODAY=$(TZ='Asia/Shanghai' date +%Y-%m-%d)
+          echo "$TODAY" > .signed_date
+          git config user.name "github-actions[bot]"
+          git config user.email "githubapis@users.noreply.github.com"
+          git add .signed_date
+          git commit -m "chore: 标记 $TODAY 已签到" || echo "无变化"
+          git push origin HEAD:${GITHUB_REF_NAME}

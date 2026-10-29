@@ -24,7 +24,7 @@ AgentRouter 每天签到能领 $25 额度，但得你自己记着去登录一次
 **放心挂着跑**
 
 - 单个 Python 文件，只依赖 `requests`，读得完也改得动
-- 全程在你自己电脑上跑，账号只写在本机 `config.json`，仓库里没有任何凭据
+- 默认在你自己电脑上跑；也可放到 GitHub Actions 云端 7×24 跑（见「☁️ 云端定时签到」），账号凭证不进仓库源码
 - 日志里账号只留前 4 位（`alic*****`），报错信息里的密码会被替换成 `***`
 
 **装一次就不用再管**
@@ -291,6 +291,51 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/agentrouter-auto-signin.
 
 ---
 
+## ☁️ 云端定时签到（GitHub Actions）
+
+不想让电脑 24 小时开着、又怕漏签？把仓库丢到 GitHub，用它的**免费** Actions 跑定时签到就行——7×24 在线、断网/关机都不影响，**完全不用改 `signin.py` 一行代码**（云端走 `auto` 模式，凭据用 Secrets 注入）。
+
+这套方案照搬了 [v2free](https://github.com) 项目的「**高频轮询 + 时间门控**」思路，并做了两点改进：
+
+| | 说明 |
+|---|---|
+| 轮询 | `cron: "*/5 * * * *"` 每 5 分钟检查一次。绝大多数轮询只跑一个几秒钟的「时间门控」判断就退出，**实际成本极低**（一天真正联网的只有 1～2 次） |
+| 门控 | 仅在到达你设定的**北京时间**（默认 `0900`）**且**今天还没签过时，才执行签到 |
+| 去重 | 签到成功后把当天日期写进仓库的 `.signed_date` 并提交，下一轮轮询读到就跳过 |
+| 兜底 | 签到失败不写 `.signed_date`，下一轮轮询自动重试——**不会像「失败也标记」那样漏掉一整天** |
+| 串行 | 加了 `concurrency` 串行锁，避免两次轮询并发都读到「未签到」而重复登录 |
+
+> 为什么不直接用 cron 定时到具体时刻？① cron 用 UTC，换算麻烦；② 单点定时一旦那次失败就漏一天。轮询 + 门控既能按北京时间精确控制，又自带「失败自动重试」。
+
+### 🔧 配置步骤（约 2 分钟）
+
+1. **把这个仓库推到 GitHub**（Fork 或自己建都行）。公开仓库的 Actions 免费；私有仓库每月也有免费额度，足够用。
+
+2. **设置 Secrets**（仓库 → Settings → Secrets and variables → Actions → New repository secret）：
+
+   | Secret 名 | 必填 | 内容 |
+   |---|:--:|---|
+   | `AGENTROUTER_ACCOUNTS_JSON` | ✅ | 账号数组，和本地 `config.json` 的 `accounts` 字段格式一致：`[{"username":"your-email@example.com","password":"your-password"}]`（多账号就多写几项，**最多 10 个**） |
+   | `AGENTROUTER_BASE_URL` | ⬜ | 可选。默认 `https://ps.air-outer.com`；想用旧域名就填 `https://agentrouter.org` |
+
+   > 凭据只存在 GitHub Secrets 里，**仓库源码、日志都不会出现明文账号密码**。
+   > 站内用 Secrets 而非明文 `config.json`，正是 v2free 项目的推荐做法。
+
+3. **（可选）改默认签到时间**：仓库 → Settings → Secrets and variables → Actions → **Variables** → New repository variable，名 `SCHEDULED`、值 `HHMM`（北京时间，例如 `0800`）。不设就用默认 `0900`。
+
+4. **开启并验证**：Actions 标签下如果工作流显示「disabled」，点进去启用。然后可以在工作流页面点 **Run workflow** 手动触发一次，看日志里出现 `"result": "OK"` 就通了。
+
+### 📊 看结果
+
+- 每次运行的输出（一行 JSON，含 `result` / `report` / 余额）都在 **Actions → 某次 run → 对应的步骤日志** 里，和本地 `auto` 模式看到的一模一样。
+- 想强制再签一次（比如改了密码）：直接手动 **Run workflow** 即可，它会忽略时间门控强制执行。
+- 仓库里会多出一个 `.signed_date` 文件，那是去重标记，正常、会自动更新，**不要手删**（删了最多当天多签一次，幂等，不影响）。
+
+> [!NOTE]
+> 云端和本机定时任务是**两套独立方案**，任选其一即可：本机方案零依赖、数据全在本地；云端方案免开机、更省心。二者凭据注入方式不同（本机 `config.json` / 云端 Secrets），逻辑完全复用同一份 `signin.py`。
+
+---
+
 ## 🛠️ 子命令
 
 ```bash
@@ -427,7 +472,7 @@ export AGENTROUTER_ACCOUNTS_JSON='[{"username":"alice@qq.com","password":" pw 12
 
 ## 🔐 安全与隐私
 
-- 仓库不含、不内嵌、不传输任何第三方密钥；账号密码只在你本机的 `config.json` 里
+- 仓库不含、不内嵌、不传输任何第三方密钥；账号密码要么在你本机的 `config.json` 里，要么在 GitHub Secrets 里（云端方案），仓库源码中不会出现明文
 - `config.json` 已在 `.gitignore` 中——**别把它提交到任何仓库**，也别贴到聊天记录里
 - 日志里账号只保留前 4 位（`alic*****`），这是数据结构层面的硬约束，不靠调用方自觉
 - 异常信息里出现的密码会被替换为 `***`
